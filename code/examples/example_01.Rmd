@@ -1,0 +1,236 @@
+---
+title: "Autocorrelation in Count Data"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tscount))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+```
+
+# Preamble
+
+As a starting point, say we have independent events arising from a Poisson distribution for which the probability density is $f(y;\mu) = \frac{\mu^y e^{-\mu}}{y!}$, with the parameter $\mu$ typically dependent on population size $n$ and characteristics such as age, SES etc. Then we say $E(Y_i) = \mu_i = n\theta_i$ with $\theta$ representing a Poisson mean, modelled as $\theta_i = e^{X'\beta}$. Taking logs of the previous expression gives $log(\mu_i) = \log(n_i) + X'\beta$ wherein $log(n_i)$ is referred to as the "offset" term.
+
+Simulating data from a Poisson GLM can be done as follows:
+
+```{r}
+# Compute the number of observations (assuming aggregation to the week)
+n <- 100
+d <- data.frame(wk_seq = 0:(n-1))
+# Invent denominators at each wk
+d$n_pop <- round(runif(n, 50, 200), 0)
+# Parameters (on the log scale)
+beta_0 <- 0.8
+beta_1 <- -0.005
+d$mu <- d$n_pop * exp(beta_0 + beta_1 * d$wk_seq)
+# Generate random draws from poisson dist with mean mu for each wk
+d$y <- rpois(n, lambda=d$mu)
+```
+
+Plot data. All pretty standard, nothing new as of yet.
+
+```{r}
+plot(d$wk_seq, d$y/d$n_pop, type = "l", ylab = "Rate", xlab = "Weeks from start")
+```
+
+# Stationarity, detrending and ACFs
+
+Stationarity is an important concept in time-series analysis. There are two kinds that are often referenced; stationary in level (syn. mean) and stationary in variance. Stationary in level means there is no apparent or detectable trend in the data. Stationary in variance means that the variability in the data does not change over time. 
+
+To assess the autocorrelation in a non-stationary series (e.g. one with a trend) we have to (1) assume that any trend is systematic i.e. we are not looking at a unit-root process and (2) estimate the trend then use this to detrend the series. For now, I am going to ignore (1).
+
+Fit a model to estimate the trend.
+
+```{r}
+fit1 <- glm(y ~ offset(log(n_pop)) + wk_seq, data = d, family = poisson())
+summary(fit1)
+```
+
+The parameters are reasonably well recovered as shown below. Note - the trend was negative and manifiest as a parameter estimate that corresponds to the multiplicative difference for a unit increase in the covariate.
+
+```{r}
+exp(coef(fit1))
+```
+
+Obtain the predicted rates and use them to detrend the series.
+
+```{r}
+d$pred <- predict(fit1, type = "response")/d$n_pop
+d$detrended_rate <- d$y / d$n_pop - d$pred
+```
+
+Plot the detrended data along with the autocorrelation function (centre). You can see that there is no significant autocorrelation, which is exactly what we expect. This is analogous to the diagnostic check that you do in linear regression when you look at the residuals and make sure that there are no obvious patterns or long runs either side of 0. The plot on the RHS shows what the ACF of the original rates (before detrending) looks like - you can see that prior to detrending, the successive values are highly correlated. 
+
+```{r, fig.width=12, fig.height=5}
+par(mfrow = c(1, 3))
+plot(d$wk_seq, d$detrended_rate, type = "l", 
+     ylab = "Rate (detrended)", xlab = "Weeks from start")
+acf(d$detrended_rate, main = "")
+acf(d$y/d$n_pop, main = "")
+```
+
+# Autocorrelation
+
+It is conceivable that a weekly series such as flu presentations to a GP clinic are correlated over time. That is if you are in flu season, the presentations in the current week are likely to be associated with those in the previous week (even after we make the series stationary by detrending).
+
+```{r}
+# Use simstudy package to simulate data.
+# see https://www.rdatagen.net/page/simstudy/ for tutorial.
+
+# define (non-random) parameters used in the data generation process
+def <- defData(varname = "b0", 
+               dist = "nonrandom", formula = 0.8, id = "id")
+def <- defData(def, varname = "b1", 
+               dist = "nonrandom", formula = -0.005)
+d1 <- genData(1, def)
+
+# add wks
+d2 <- addPeriods(d1, idvars = "id", nPeriods = n)
+
+# add denominators 
+addef <- defDataAdd(varname = "n_pop", 
+                    dist = "normal", formula = "50", variance = 2, 
+                    link = "identity")
+d2 <- addColumns(addef, d2)
+d2$n_pop <- round(d2$n_pop, 0)
+
+# add mu 
+addef <- defDataAdd(varname = "mu", 
+                    dist = "nonrandom", formula = "n_pop * exp(b0 + b1 * period)")
+d2 <- addColumns(addef, d2)
+
+# and now we should be able to generate the poisson rv
+d3 <- addCorGen(dtOld = d2, 
+                idvar = "id", 
+                nvars = n, 
+                rho = .6, corstr = "ar1", dist = "poisson", 
+                param1 = "mu", 
+                cnames = "y")
+
+# generate data under iid for comparison
+d3$y_iid <- rpois(n, d3$mu)
+                  
+head(d3)
+```
+
+Plot the data overlayed with an IID series (i.e. with no autocorrelation). It won't necessarily jump out at you straight away but you should be able to see that the correlated data (black line) doesn't bounce around as much as the IID data (red dashed line).
+
+```{r}
+plot(d3$period, d3$y/d3$n_pop, type = "l", lwd = 2,
+     ylim = c(1, 2.5),
+     ylab = "Rate", 
+     xlab = "Weeks from start")
+lines(d3$period, d3$y_iid/d3$n_pop, col = "red", lty = 2)
+```
+
+Fit linear models to autocorrelated and iid data. The results are pretty similar.
+
+```{r}
+summary(fit1 <- glm(y ~ period + offset(log(n_pop)), data = d3, family = poisson()))$coef
+summary(fit2 <- glm(y_iid ~ period + offset(log(n_pop)), data = d3, family = poisson()))$coef
+```
+
+Now detrend both datasets.
+
+```{r}
+d3$pred1 <- predict(fit1, type = "response")/d3$n_pop
+d3$detrended_rate1 <- d3$y / d3$n_pop - d3$pred1
+
+d3$pred2 <- predict(fit2, type = "response")/d3$n_pop
+d3$detrended_rate2 <- d3$y_iid / d3$n_pop - d3$pred2
+```
+
+And plot the ACF for both. You can see in the LHS plot that autocorrelation remains in the series even after it is detrended. The RHS shows the ACF for the detrended IID series and again shows no autocorrelation.
+
+```{r}
+par(mfrow = c(1, 2))
+acf(d3$detrended_rate1, main = "")
+acf(d3$detrended_rate2, main = "")
+```
+
+Furthermore, while the model fit results are similar, the residuals (see below) associated with the model fitted to the correlated data also has more structure than is desirable. This violates one of the assumptions of regression and can lead to incorrect inference (due to inflated/deflated standard errors).
+
+```{r}
+d3$resid1 <- residuals(fit1)
+d3$resid2 <- residuals(fit2)
+u <- max(c(d$resid1, d3$resid2))
+l <- min(c(d$resid1, d3$resid2))
+plot(d3$resid1, type = "l", lwd = 2, ylab = "Resid", 
+     ylim = c(l, u))
+lines(d3$resid2, col = "red", lty = 2)
+abline(h = 0, col = "blue", lty = 3)
+```
+
+The are formal tests to assess whether the residuals are correlated. One of them is the Ljung-Box test, see <https://robjhyndman.com/hyndsight/ljung-box-test/>. In R you can run the test using `Box.test`. If you reject the null hypothesis (low p-value) then there is evidence of serial-correlation (syn. for autocorrelation) in your series. Predictably, when run on the autocorrelated data we reject the null hypothesis and when run on the iid data we do not reject the null.
+
+```{r}
+Box.test(d3$resid1, type="Ljung-Box", lag=10)$p.value
+Box.test(d3$resid2, type="Ljung-Box", lag=10)$p.value
+```
+
+# Summary
+
+We simulated Poisson iid data with a simple trend. Then we made the series stationary by de-trending and produced an ACF plot to assess whether the series was autocorrelated - it wasn't. We used the `simstudy` package to create autocorrelated Poisson data and then repeated the process of detrending and looking at the ACF plots. The model fitted to the correlated data had poor diagnostics in that there was clear structure in the residuals, which violates classical regression assumptions.
+
+Note, there are some subtleties that I either glossed over or completely ignored because they are probably beyond the scope of what we are trying to accomplish. Treat the above as a simplified representation of things rather than a comprehensive review.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,38 @@
+The `simstudy` <https://www.rdatagen.net/page/simstudy/> and <https://cran.r-project.org/web/packages/simstudy/vignettes/simstudy.html> package is a worthwhile investment in time if you want to generate simulated data using a consistent and effecient framework. Amongst other things, you can use `simstudy` to simulate correlated data from discrete (e.g. binary and count) distributions.
+
+
+For 
+
+```{r}
+# Formula specifying the 
+lambda <- "3 - 0.03 * period"
+def1 <- defDataAdd(varname = "lambda", formula = lambda, dist = "nonrandom", link = "log")
+# Create single series id - unfortunately this is a bit of a cludge.
+dx <- genData(1)
+# 
+nwks <- 100
+dx <- addPeriods(dx, nPeriods = nwks)
+dx <- addColumns(def1, dx)
+
+dg <- addCorGen(dx, nvars = nwks, corMatrix = NULL, rho = .3, corstr = "ar1", 
+                dist = "poisson", param1 = "lambda", 
+                method = "copula", formSpec = lambda, 
+                periodvar = "wk_seq")
+                
+                
+cor(dcast(dg, id ~ period, value.var = "X")[,-1])
+
+library(geepack)
+geefit <- geeglm(X ~ period, id = id, data = dg, corstr = "ar1", 
+                 family = binomial)
+summary(geefit)
+
+```
+
+
+Generate using AR 1 model - just base current on previous with quite strong rho.
+
+Reference the model from tscount.
+
+
+The `tscount` package enables us to simulate such data using the `tsglm.sim` function (see `?tsglm.sim`).

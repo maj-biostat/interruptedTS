@@ -1,0 +1,153 @@
+---
+title: "Data Structure for ITS"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+```
+
+# Preamble 
+
+For simplicity, start with a linear regression model. You can produce a segmented (also known as piecewise) linear model that includes terms to characterise the change in level and trend pre and post the time at which an intervention is introduced with the following parameterisation. 
+
+\begin{aligned}
+Y_i = \beta_0 + \beta_1 wk_i + \beta_2 idxVacc_i + \beta_3 wkpost_i + e_i
+\end{aligned}
+
+where $Y_i$ is the response of interest at week $i$, $wk_i \in \{1, 2, \dots\}$ is the sequential week number, $idxVacc_i$ is an indicator for the introduction of the vaccination, being 0 prior to the introduction of the vaccination and 1 afterwards, $wkPost_i$ is the sequential week number (from zero) since the introduction of the vaccinations.
+
+With regards to the parameters; $\beta_0$ is the intercept (at week zero), $\beta_1$ is the trend pre-vacc, $\beta_2$ is the immediate change in the mean (also referred to as level) following the introduction of the vaccination, $\beta_3$ is the change in the temporal trend following the introduction of the vacc.
+
+For the sake of clarity, the above simplifies the situation but it gives the basics from which more complex parameterisations can be made.
+
+In R, you can simulate data under this model with the following code. Note that it assumes that each observation is independent, which isn't necessarily the case in these kinds of data.
+
+```{r}
+# Years of interest, converted to 0 to 13
+yr <- 2000:2013 - 2000
+# Introduce the 52 weeks to each year
+d <- expand.grid(yr, 1:52)
+n <- nrow(d)
+d <- d[order(d$Var1), ]
+# Now introduce sequential wks from start - start with zero 
+# so intercepts aligns properly.
+d$wk_seq <- 0:(n-1)
+# Label fields
+names(d) <- c("yr", "wk", "wk_seq")
+# Add the actual year for ease of interp (not for model)
+d$yr_ref <- d$yr + 2000
+# Add indicator to mark when vaccinations start
+d$idx_vacc_i <- ifelse(d$yr_ref >= 2007, 1, 0)
+# Add in the 
+n_wks_post <- nrow(d[d$yr_ref >= 2007, ])
+d$wk_post <- c(rep(0, n - n_wks_post ), 0:(n_wks_post-1))
+# We have the design/covariate matrix. Now we can simulate based on known betas:
+beta_0 <- 50
+beta_1 <- -0.02
+beta_2 <- -2
+beta_3 <- -0.015
+sd <- 0.25
+
+d$y <- beta_0 + 
+  beta_1 * d$wk_seq + 
+  beta_2 * d$idx_vacc_i + 
+  beta_3 * d$wk_post + 
+  rnorm(nrow(d), 0, sd)
+
+head(d)
+```
+
+Plot the data.
+
+```{r}
+plot(d$wk_seq, d$y, ylim = c(25, 50), ylab = "Rate", xlab = "Weeks from start")
+```
+
+Fit a linear regression model to the data using the same specification that was used to simulated the data.
+
+```{r}
+summary(fit1 <- lm(y ~ wk_seq + factor(idx_vacc_i) + wk_post, data = d))
+```
+
+The parameter estimates approximate the true values that were used to generate the data and the results suggest both a significant change in level and trend.
+
+Predictions from model (see `?predict.lm`).
+
+```{r}
+d$pred1 <- predict(fit1, se = F)
+dnew <- d
+dnew$idx_vacc_i <- 0
+dnew$wk_post <- 0
+d$pred2 <- predict(fit1, newdata = dnew, se = F)
+```
+
+
+```{r}
+plot(d$wk_seq, d$y, ylim = c(25, 50), ylab = "Rate", xlab = "Weeks from start")
+lines(d$pred1, col = "red", lwd = 2)
+lines(d$pred2, col = "red", lwd = 2, lty = 2)
+```
+
+# Summary
+
+In this example, we specified a simple segmented regression, simulated data and then recovered the parameters from the data generation process. Finally, we plotted the results and gave an interpretation of the parameter estimates.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
