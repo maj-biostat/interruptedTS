@@ -217,7 +217,7 @@ Box.test(d3$resid2, type="Ljung-Box", lag=10)$p.value
 
 We simulated Poisson iid data with a simple trend. Then we made the series stationary by de-trending and produced an ACF plot to assess whether the series was autocorrelated - it wasn't. We used the `simstudy` package to create autocorrelated Poisson data and then repeated the process of detrending and looking at the ACF plots. The model fitted to the correlated data had poor diagnostics in that there was clear structure in the residuals, which violates classical regression assumptions.
 
-Note, there are some subtleties that I either glossed over or completely ignored because they are probably beyond the scope of what we are trying to accomplish. Treat the above as a simplified representation of things rather than a comprehensive review.
+Note, there are some subtleties that I glossed over or completely ignored because they are beyond the scope of what we are trying to accomplish. Treat the above as a simplified introductory representation of things rather than a comprehensive review.
 
 
 
