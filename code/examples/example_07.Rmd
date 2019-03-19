@@ -1,0 +1,172 @@
+---
+title: "GAMM"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+
+
+```{r}
+library(mgcv)
+library(nlme)
+## load custom functions
+source("derivFun.R")
+source("tsDiagGamm.R")
+
+
+URL <- url("http://www.cru.uea.ac.uk/cru/data/temperature/HadCRUT3v-gl.dat")
+gtemp <- read.table(URL, fill = TRUE)
+## Don't need the even rows
+gtemp <- gtemp[-seq(2, nrow(gtemp), by = 2), ]
+## set the Year as rownames
+rownames(gtemp) <- gtemp[,1]
+## Add colnames
+colnames(gtemp) <- c("Year", month.abb, "Annual")
+## Data for 2011 incomplete so work only with 1850-2010 data series
+gtemp <- gtemp[-nrow(gtemp), ]
+## Plot the data
+ylab <- expression(Temperature~Anomaly~(1961-1990)~degree*C)
+plot(Annual ~ Year, data = gtemp, type = "o", ylab = ylab)
+```
+
+
+
+
+
+
+```{r}
+m1 <- gamm(Annual ~ s(Year, k = 20), data = gtemp)
+summary(m1$gam)
+acf(resid(m1$lme, type = "normalized"))
+## ...wait... look at the plot, only then do...
+pacf(resid(m1$lme, type = "normalized"))
+```
+
+
+```{r}
+m2 <- gamm(Annual ~ s(Year, k = 30), data = gtemp,
+           correlation = corARMA(form = ~ Year, p = 1))
+## ...and fit the AR2
+m3 <- gamm(Annual ~ s(Year, k = 30), data = gtemp,
+           correlation = corARMA(form = ~ Year, p = 2))
+
+ anova(m1$lme, m2$lme, m3$lme)
+plot(m2$gam, residuals = TRUE, pch = 19, cex = 0.75)
+with(gtemp, tsDiagGamm(m2, timevar = Year, observed = Annual))
+```
+
+
+The fitted model may be overly complex and over fitted to the data if we do not account for the violation of independence in the residuals.
+
+```{r}
+plot(Annual ~ Year, data = gtemp, type = "p", ylab = ylab)
+pdat <- with(gtemp,
+             data.frame(Year = seq(min(Year), max(Year),
+                        length = 200)))
+p1 <- predict(m1$gam, newdata = pdat)
+p2 <- predict(m2$gam, newdata = pdat)
+lines(p1 ~ Year, data = pdat, col = "red")
+lines(p2 ~ Year, data = pdat, col = "blue")
+legend("topleft",
+       legend = c("Uncorrelated Errors","AR(1) Errors"),
+       bty = "n", col = c("red","blue"), lty = 1)
+```
+
+
+when were temperatures statistically significantly increasing
+
+method of finite differences
+
+To produce derivatives via finite differences, we compute the values of the fitted trend at a grid of points over the entire data. We then shift the grid by a tiny amount and recompute the values of the trend at the new locations.  The differences between the two sets of fitted values are the first differences of the trend and give a measure of the slope of the trend at any point in time.
+
+```{r}
+MyDeriv <- function(mod, n = 200, eps = 1e-7, newdata) {
+    if(isTRUE(all.equal(class(mod), c("gamm", "list"))))
+        mod <- mod$gam
+    m.terms <- attr(terms(mod), "term.labels")
+    if(missing(newdata)) {
+        newD <- sapply(model.frame(mod)[, m.terms, drop = FALSE],
+                       function(x) seq(min(x), max(x), length = n))
+        names(newD) <- m.terms
+    } else {
+        newD <- newdata
+    }
+    X0 <- predict(mod, data.frame(newD), type = "lpmatrix")
+    newD <- newD + eps
+    X1 <- predict(mod, data.frame(newD), type = "lpmatrix")
+    Xp <- (X1 - X0) / eps
+    Xp.r <- NROW(Xp)
+    Xp.c <- NCOL(Xp)
+    ## dims of bs
+    bs.dims <- sapply(mod$smooth, "[[", "bs.dim") - 1
+    # number of smooth terms
+    t.labs <- attr(mod$terms, "term.labels")
+    nt <- length(t.labs)
+    ## list to hold the derivatives
+    lD <- vector(mode = "list", length = nt)
+    names(lD) <- t.labs
+    for(i in seq_len(nt)) {
+        Xi <- Xp * 0
+        want <- grep(t.labs[i], colnames(X1))
+        Xi[, want] <- Xp[, want]
+        df <- Xi %*% coef(mod)
+        df.sd <- rowSums(Xi %*% mod$Vp * Xi)^.5
+        lD[[i]] <- list(deriv = df, se.deriv = df.sd)
+        ## Xi <- Xp * 0 ##matrix(0, nrow = Xp.r, ncol = Xp.c)
+        ## J <- bs.dims[i]
+        ## Xi[,(i-1) * J + 1:J + 1] <- Xp[,(i-1) * J + 1:J +1]
+        ## df <- Xi %*% coef(mod)
+        ## df.sd <- rowSums(Xi %*% mod$Vp * Xi)^.5
+        ## lD[[i]] <- list(deriv = df, se.deriv = df.sd)
+    }
+    class(lD) <- "Deriv"
+    lD$gamModel <- mod
+    lD$eps <- eps
+    lD$eval <- newD - eps
+    return(lD)
+}
+```
+
+```{r}
+m2.d <- MyDeriv(m2, n = 200)
+plot(m2.d, sizer = TRUE, alpha = 0.01)
+```
+
+
+
+
+
+
+
+```{r}
+plot(Annual ~ Year, data = gtemp, type = "p", ylab = ylab)
+lines(p2 ~ Year, data = pdat)
+CI <- confint(m2.d, alpha = 0.01)
+S <- signifD(p2, m2.d$Year$deriv, CI$Year$upper, CI$Year$lower,
+             eval = 0)
+lines(S$incr ~ Year, data = pdat, lwd = 3, col = "blue")
+lines(S$decr ~ Year, data = pdat, lwd = 3, col = "red")
+```
+
+
+
+
