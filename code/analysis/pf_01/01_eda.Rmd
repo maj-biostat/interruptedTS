@@ -1,0 +1,236 @@
+---
+title: "EDA"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+Load data, filter out last month, compute rate (per 100k), introduce month sequence number (starts at 0) and time since introduction of RV1 (starts at zero). Aggregate across all age-groups.
+
+```{r, echo = T}
+d <- readxl::read_xls("dat_orig\\Times series set up.xls")
+# by agegrp
+d1 <- d %>% 
+  dplyr::filter(!(year_adm == 2012 & month_adm == 12)) %>%
+  dplyr::rename(i_vac = vaccineyear,
+                count = counts,
+                mnth = month_adm,
+                yr = year_adm) %>%
+  dplyr::mutate(agegrp = factor(agegpfull, 
+                                labels = unique(d$agegpfull),
+                                levels = unique(d$agegpfull))) %>%
+  dplyr::select(-agegpfull, 
+                -denom_nonindig,
+                -denom_indig,
+                -counts_nonindig,
+                -counts_indig,
+                -monthcount) %>%
+  dplyr::arrange(agegrp, yr, mnth) %>%
+  dplyr::mutate(rate = 100000 * count / denom) %>%
+  dplyr::group_by(agegrp) %>%
+  dplyr::mutate(mnth_seq = 0:(n()-1),
+                mnth_since_vac = 0:(n()-1), 
+                mnth_since_vac = mnth_since_vac -36) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac),
+                rate_lag1 = lag(rate),
+                rate_d1 = rate - lag(rate),
+                rate_d1_lag1 = lag(rate_d1)) 
+
+# aggregated across all agegrp
+d2 <- d1 %>% 
+  dplyr::group_by(yr, mnth, i_vac) %>%
+  dplyr::summarise(count = sum(count),
+                   denom = sum(denom)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(yr, mnth) %>%
+  dplyr::mutate(rate = 100000 * count / denom,
+                mnth_seq = 0:(n()-1),
+                mnth_since_vac = 0:(n()-1)) %>%
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac),
+                rate_lag1 = lag(rate),
+                rate_d1 = rate - lag(rate),
+                rate_d1_lag1 = lag(rate_d1)) 
+
+saveRDS(d1, "dat_clean\\d_by_age.RDS")
+saveRDS(d2, "dat_clean\\d_all_age.RDS")
+```
+
+
+# Visualisation
+
+Gastro presentations by age-group. 
+
+Non-stationary in level and variance.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+ggplot(d1, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp)
+```
+
+Allow different y-axis for each age group. What is the peak attributable to that is around month 75 in the 3 year, 4 year and 5-9 year age group? 
+
+```{r, echo = F, fig.width=10, fig.height=9}
+ggplot(d1, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free")
+```
+
+All-age gastro presentations.
+
+```{r, echo = F, fig.width=7, fig.height=4}
+ggplot(d2, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")
+```
+
+Monthly seasonality not readily apparent. Maybe some increase towards the end of the year in younger age groups.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+ggplot(d1, aes(x = factor(mnth), y = rate, group = yr, colour = factor(yr)))+
+  geom_line()+
+  scale_x_discrete("Months", breaks = seq(0, 12, 2)) +
+  scale_y_continuous("Rate per 100k")+
+  scale_color_discrete("Year")+
+  facet_wrap(~agegrp, scales = "free")
+```
+
+First differences.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+ggplot(d1 %>% 
+         dplyr::group_by(agegrp) %>%
+         dplyr::filter(row_number() != 1) %>%
+         dplyr::ungroup(), 
+       aes(x = mnth_seq, y = rate_d1))+
+  geom_line()+
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_x_continuous("Months from Aug'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free")
+```
+
+ACFs.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+# https://stackoverflow.com/questions/37325517/acf-by-group-in-r
+# https://rh8liuqy.github.io/ACF_PACF_by_ggplot2.html
+d_acf <- d1 %>%
+  dplyr::group_by(agegrp) %>%
+  dplyr::filter(row_number() != 1) %>%
+  tidyr::nest(-agegrp) %>%
+  dplyr::mutate(acf_results = purrr::map(data, ~ acf(.x$rate_d1, plot = F)),
+                acf = purrr::map(acf_results, ~ drop(.x$acf))) %>%
+  tidyr::unnest(acf) %>%
+  dplyr::group_by(agegrp) %>%
+  dplyr::mutate(lag = seq(0, n() - 1))
+
+ggplot(data = d_acf, 
+            aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+  scale_x_continuous("Months lag") +
+  geom_segment(mapping = aes(xend = lag, yend = 0)) + 
+  facet_wrap(~agegrp)
+
+```
+
+Lag-1 plots (non-stationary level) - how the present rate relates to the previous month's rate in the rate series. Mainly reflects the trend.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+# http://rpubs.com/sinhrks/plot_tsstats
+ggplot(d1 %>% 
+         dplyr::group_by(agegrp) %>%
+         dplyr::filter(row_number() != 1) %>%
+         dplyr::ungroup(), 
+       aes(x = rate_lag1, y = rate))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  scale_x_continuous("Rate @ lag 1") +
+  scale_y_continuous("Rate")+
+  facet_wrap(~agegrp, scales = "free")
+
+```
+
+Lag-1 plots (stationary level)- how the present rate relates to the previous month's rate in the first differences. Some negative autocorrelation in older age groups (high rate one month associated with low rates the next month). Not much (that I really have faith in) apparent. 
+
+```{r, echo = F, fig.width=10, fig.height=9}
+# http://rpubs.com/sinhrks/plot_tsstats
+ggplot(d1 %>% 
+         dplyr::group_by(agegrp) %>%
+         dplyr::filter(row_number() != 1 & row_number() != 2) %>%
+         dplyr::ungroup(), 
+       aes(x = rate_d1_lag1, y = rate_d1))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  scale_x_continuous("Rate @ lag 1") +
+  scale_y_continuous("Rate")+
+  facet_wrap(~agegrp, scales = "free")
+
+```
+
+

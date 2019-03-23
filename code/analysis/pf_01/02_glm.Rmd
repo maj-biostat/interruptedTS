@@ -1,0 +1,212 @@
+---
+title: "GLM"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+See EDA for data load.
+
+```{r}
+d1 <- readRDS("dat_clean//d_by_age.RDS")
+summary(d1)
+```
+
+# GLM
+
+Independent poisson models fitted for each age group.
+
+```{r}
+fit1 <- function(x){
+  d <- d1 %>%
+    dplyr::filter(agegrp == x)
+  lm1 <- glm(count ~ mnth_seq + factor(i_vac) + mnth_since_vac + offset(log(denom)), 
+             data = d, family = "poisson")
+  
+  # in order to get the rate (number of cases of one unit of population)
+  # you need to do this hack
+  d2 <- copy(d)
+  d2$denom <- 1
+  d$pred <- predict(lm1, type = "response", newdata = d2) * 100000
+  list(desc = paste0(x), lm1, d)
+}
+fits <- lapply(unique(d1$agegrp), fit1)
+
+```
+
+Model results. Interpretation is as per the poisson model (exponentiated parameter estimates are multiplicative).
+
+For example, at the start of the data series in Jul'04, the <12 months group has a rate of $100,000*exp(-3.62) = 2678$ cases per 100k population. This rate initially declines multiplicatively by a factor of $exp(-0.00275) = 0.997$ per month so that by Jul'07 the rate is around 2500 cases per 100k population. The instantaneous change in the rate when the vaccination is introduced in Jul'07 is $exp(-0.286) = 0.751$ dropping the rate to around 1875. The post vaccination trend is changed multiplicatively from the pre-vaccination trend by a factor of $exp(-0.0025)=0.9975$, i.e. the trend is less steep. However, it is easier to think about this additively on the linear predictor rather than on the response. On the linear predictor we have a pre-vac trend of -0.00275 and then post-vac the trend is -0.002752613 + -0.002496034 = -0.0052. 
+
+```{r}
+get_dat <- function(x){
+  return(list(desc = x[[1]], model_res = broom::tidy(x[[2]])))
+}
+l_res <-lapply(fits, get_dat)
+l_res
+```
+
+Workings for <12 months example.
+
+```{r}
+get_dat <- function(x){
+  return(x[[3]])
+}
+d_res <- dplyr::bind_rows(lapply(fits, get_dat))
+# model for <12 months agegrp
+b <- coef(fits[[1]][[2]])
+
+dtmp <- d_res %>% 
+  dplyr::filter(agegrp == "<12 months") %>% 
+  dplyr::select(mnth, yr, i_vac, count, denom, rate, mnth_seq, mnth_since_vac, pred)
+
+dtmp$pred2 <- 100000 * (exp(b[1] + b[2] * dtmp$mnth_seq))
+dtmp$pred3 <- 100000 * (exp(b[1] + b[2] * dtmp$mnth_seq +
+                              b[3] * dtmp$i_vac + 
+                              b[4] * dtmp$mnth_since_vac))
+
+# At mnth_seq 35 we have rate = 2437.843. The vac kicks in from mnth_seq 36.
+# The instaneous change is given by:
+# 2437.843 * exp(b2) * exp(b3) = 
+# 2437.843 * exp(-0.002752613 ) * exp(-0.2860758 ) = 1826.288
+# In the next month the new trend has to be incorporate giving
+# 1826.288 * exp(b3) * exp(b4) = 
+# 1826.288 * exp(-0.002752613) * exp(-0.002496034 ) = 1816.728
+# In the next month 
+# 1816.728 * exp(b3) * exp(b4) = 
+# 1816.728 * exp(-0.002752613) * exp(-0.002496034 ) = 1807.218
+# and so on.
+
+as.data.frame(dtmp) %>% 
+  dplyr::select(mnth_seq, pred, pred2, pred3) %>% 
+  dplyr::filter(row_number() %in% 31:40)
+```
+
+
+## Plot predictions.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+ggplot(d_res, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred, colour = cbp[2]), size = 1) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  theme(legend.position = "none") +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free")
+```
+
+## Alternative parameterisation
+
+Instead of looking at the change in the trend the model can be parameterised such that you obtain a pre and post trend. In this model you can test if the trend is non-unity but you cannot directly test for a change in trend pre versus post.
+
+Rejig data.
+
+```{r}
+d1 <- d1 %>% 
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, mnth_since_vac, mnth_seq),
+                mnth_seq = ifelse(i_vac == 0, mnth_seq, 0))
+```
+
+Refit. Now the mnth_seq estimate gives the slope pre-vac and the mnth_since_vac estimate gives the slope post-vac. Recall the earlier example.
+
+```{r}
+fits <- lapply(unique(d1$agegrp), fit1)
+get_dat <- function(x){
+  return(list(desc = x[[1]], model_res = broom::tidy(x[[2]])))
+}
+l_res <-lapply(fits, get_dat)
+l_res[[1]]
+```
+
+## Diagnostics
+
+Just for the first model. Certainly dubious, although I have seen worse.
+
+```{r, echo = F, fig.width=9, fig.height=7}
+autoplot(fits[[1]][[2]], which = 1:6, ncol = 3, label.size = 3)
+```
+
+There appears to be some structure in the residuals.
+
+```{r, echo = F, fig.width=6, fig.height=4}
+d_acf <- broom::tidy(acf(resid(fits[[1]][[2]]), plot = F))
+
+ggplot(data = d_acf, 
+            aes(x = lag, y = acf)) +
+  geom_hline(aes(yintercept = 0)) +
+  scale_x_continuous("Months lag") +
+  geom_segment(mapping = aes(xend = lag, yend = 0))
+```
+
+# Summary
+
+With the exception of a normal assumption, the above is the simplest approach possible. Independent GLMs fitted to the data associated with each age group. Instantenous change and post vac trend modelled. Provided summaries of model parameter estimates along with model predictions and alternative parameterisation. Diagnostics suggest modelling approach warrants some rethinking.
+
+# Next Steps
+
+Probably think about incorporating AR1 structure into models to see how that effects (1) prediction (2) fit and (3) diagnostics. Options to explore include GLS, GAM, maybe a bayesian formulation either a BSTM or a augmented Poisson model with AR1 errors might be worth a look. I like the idea of GAMs as a first pass because they will allow us to model some of the non-linearity in the data. Additionally, we need to think about how to model (monthly/quarterly or simply an indicator of peak versus off-peak) seasonality. 
+
+Finally, there may be some merit in looking at simultaneous estimation to take advantage of the within and between group correlation.
+
+
+
+
