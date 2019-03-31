@@ -1,5 +1,5 @@
 ---
-title: "GLM - seasonality"
+title: "GLARMA - negative binomial"
 author: "Mark Jones"
 date: "`r Sys.time()`"
 output:
@@ -45,7 +45,8 @@ suppressPackageStartupMessages(library(brms))
 suppressPackageStartupMessages(library(forecast))
 suppressPackageStartupMessages(library(ggfortify))
 suppressPackageStartupMessages(library(readxl))
-
+suppressPackageStartupMessages(library(glarma))
+suppressPackageStartupMessages(library(MASS))
 
 ggplot2::theme_set(ggplot2::theme_bw())
 ggplot2::theme_update(text = element_text(size = 10))
@@ -64,47 +65,42 @@ cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55
 
 # Preamble
 
-Several approaches are available to model seasonality ranging from deterministic indicators to stochastic autoregressive components.
-
-We use the data that is configured to exclude the first year of vax.
-
-## Seasonality
-
-For the first go at introducing seasonality, add indicator variables to represent seasons to the model. December to February is summer; March to May is autumn; June to August is winter; and September to November is spring. The benefit with this approach is that it is very easily interpretable. The downside is that it probably doesn't model seasonality optimally.
-
-In addition to the exisiting covariates, this new specification allows differential pre and post seasonal effects. However, within the pre and post period the seasonal effects are fixed (they cannot vary over time).
+Last time we fit GLARMA models using poisson distributional assumptions. The PITs looked bad so here we use negative binomial. Now we use harmonic for modelling seasons.
 
 ```{r, echo = T, eval = T}
-d1 <- readRDS("dat_clean//d_rm_vax_1.RDS")
-
-# Autumn corresponds to the reference season
-d1 <- d1 %>%
-  dplyr::mutate(winter = ifelse(mnth %in% c(6, 7, 8), 1, 0),
-                spring = ifelse(mnth %in% c(9, 10, 11), 1, 0),
-                summer = ifelse(mnth %in% c(12, 1, 2), 1, 0)) %>%
-  dplyr::mutate(season = ifelse(winter == 1, "Win", 
-                                ifelse(spring == 1, "Spr", 
-                                       ifelse(summer == 1, "Sum", "Aut"))))
-d1$season <- factor(d1$season, levels = c("Aut", "Win", "Spr", "Sum"))
-
-saveRDS(d1, "dat_clean\\d_seas1.RDS")
+d1 <- readRDS("dat_clean//d_seas2.RDS")
+d1$rate_lag1 <- d1$rate_lag1  / 1000
 ```
 
-# GLM
+# GLARMA
 
-Independent poisson models fitted for each age group. Exclude the first year of vax from the model and include seasonal indicator covariates.
+As per previous commentary except that we have to use `MASS::glm.nb` to get the initial model estimates and we need to provide `theta` for the GLARMA model.
 
 ```{r}
 fit1 <- function(x){
   dfit <- d1 %>%
     dplyr::filter(agegrp == x & incl == 1)
-  lm1 <- glm(count ~ mnth_seq + factor(i_vac) + mnth_since_vac + 
-               winter + spring + summer +
+
+  lm1 <- glm.nb(count ~ mnth_seq + i_vac + mnth_since_vac + 
+               cos.t1 + sin.t1 + cos.t2 + sin.t2 +
                offset(log(denom)), 
-             data = dfit, family = "poisson")
+             data = dfit)
   
-  # in order to get the rate (number of cases of one unit of population)
-  # you need to do this hack
+  mX <- model.matrix(lm1)
+  y <- dfit$count
+  mOffset <- log(dfit$denom)
+  
+  lm2 <- glarma(y, mX, offset = mOffset,
+              phiLags = c(1),
+              #thetaLags = 3, #thetaInit = c(0.01),
+              type = "NegBin",
+              alpha = lm1$theta, alphaInit = lm1$theta,
+              beta = coef(lm1),
+              method = "FS",
+              residuals = "Score", maxit = 1000, grad = 2.22e-8)
+  s <- summary(lm2, tests = F)
+  
+  # fitted
   dpred <- d1 %>%
     dplyr::filter(agegrp == x)  %>%
     dplyr::mutate(denom = 1)
@@ -112,22 +108,29 @@ fit1 <- function(x){
   d <- d1 %>%
     dplyr::filter(agegrp == x)
   
-  d$pred <- predict(lm1, type = "response", newdata = dpred) * 100000
-  d$pred <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred)
+  d$pred1 <- predict(lm1, type = "response", newdata = dpred) * 100000
+  d$pred1 <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred1)
   
-  list(desc = paste0(x), lm1, d)
+  pred2 <- 100000 * glarma::fitted.glarma(lm2)/dfit$denom
+  
+  d$pred2 <- NA
+  d$pred2[1:36] <- pred2[1:36]
+  d$pred2[49:nrow(d)] <- pred2[37:length(pred2)]
+  
+  list(desc = paste0(x), lm1, lm2, d)
 }
 fits <- lapply(unique(d1$agegrp), fit1)
 
 ```
 
-Model results. Interpretation is described previously. AIC included.
+Model results. Interpretation is described previously.
 
-```{r}
+
+```{r, eval = T}
 get_dat <- function(x){
   return(list(desc = x[[1]], 
-              model_res = broom::tidy(x[[2]]),
-              aic = AIC(x[[2]])))
+              glm_res = summary(x[[2]]),
+              glarma_res = summary(x[[3]], tests = F)))
 }
 l_res <-lapply(fits, get_dat)
 l_res
@@ -137,29 +140,46 @@ l_res
 
 Again, we have a gap for the Jul 2007 to Jun 2008 period. The seasonal effects are shown. Winter and Spring appear to consistently be the seasons in which most cases occur. It looks like the pre-vax Winter and Spring peaks have been damped down in the post vax period. This is most apparent in the lower ages.
 
-```{r, echo = F, fig.width=9, fig.height=12}
+```{r, echo = F, fig.width=9, fig.height=12, eval = T}
 get_dat <- function(x){
-  return(x[[3]])
+  return(x[[4]])
 }
 d_res <- dplyr::bind_rows(lapply(fits, get_dat))
-d_res$season <- factor(d1$season, 
-                       levels = c("Aut", "Win", "Spr", "Sum"),
-                       labels = c("Aut", "Win", "Spr", "Sum"))
+
 
 ggplot(d_res, aes(x = mnth_seq, y = rate))+
   geom_line()+
-  geom_line(aes(x = mnth_seq, y = pred, colour = cbp[2]), size = 1) + 
-  geom_point(aes(x = mnth_seq, y = pred, colour = season)) +
-  scale_color_discrete(breaks=c("Aut", "Win", "Spr", "Sum"))+
+  geom_line(aes(x = mnth_seq, y = pred1, colour = cbp[2]), size = 0.8) + 
+  geom_line(aes(x = mnth_seq, y = pred2, colour = cbp[6]), size = 0.8) + 
   geom_vline(xintercept = 37, colour = cbp[2]) +
  # theme(legend.position = "none") +
   scale_x_continuous("Months from Jul'04") +
   scale_y_continuous("Rate per 100k")+
-  facet_wrap(~agegrp, scales = "free", ncol = 3)
+  facet_wrap(~agegrp, scales = "free", ncol = 2)
 ```
+
+## Diagnostics
+
+Some of these look a bit better than the results generated under poisson assumptions.
+
+```{r, eval = T}
+
+for(i in 1:length(fits)){
+  l1 <- fits[[i]][[3]]
+  par(mfrow = c(2,2))
+  plot(l1, which = c(2,3,5),
+       titles = list(NULL, 
+                     NULL, 
+                     "PIT for GLARMA (Neg. Binomial)"))
+}
+
+```
+
 
 # Summary
 
-Simple seasonal indicator variables included.
+Revised version of the GLARMA models this time using Neg Bin distributional assumptions. The models seem to fit a bit better than those estimated under poisson assumptions.
+
+See https://jrnold.github.io/ssmodels-in-stan/
 
 

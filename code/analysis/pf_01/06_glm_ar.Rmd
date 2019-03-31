@@ -122,7 +122,7 @@ l_res
 Again, we have a gap for the Jul 2007 to Jun 2008 period. The series appears to be represented a lot more closely by the predictions. Overfitting?
 
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 get_dat <- function(x){
   return(x[[3]])
 }

@@ -122,7 +122,7 @@ Gastro presentations by age-group.
 
 Non-stationary in level and variance.
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 ggplot(d1, aes(x = mnth_seq, y = rate))+
   geom_line()+
   geom_vline(xintercept = 37, colour = cbp[2]) +
@@ -135,7 +135,7 @@ Allow different y-axis for each age group. What is the peak attributable to that
 
 Outbreak - include indicator.
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 ggplot(d1, aes(x = mnth_seq, y = rate))+
   geom_line()+
   geom_vline(xintercept = 37, colour = cbp[2]) +
@@ -146,7 +146,7 @@ ggplot(d1, aes(x = mnth_seq, y = rate))+
 
 All-age gastro presentations.
 
-```{r, echo = F, fig.width=7, fig.height=4}
+```{r, echo = F, fig.width=6, fig.height=3.5}
 ggplot(d2, aes(x = mnth_seq, y = rate))+
   geom_line()+
   geom_vline(xintercept = 37, colour = cbp[2]) +
@@ -156,7 +156,7 @@ ggplot(d2, aes(x = mnth_seq, y = rate))+
 
 Monthly seasonality not readily apparent. Maybe some increase towards the end of the year in younger age groups.
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 ggplot(d1, aes(x = factor(mnth), y = rate, group = yr, colour = factor(yr)))+
   geom_line()+
   scale_x_discrete("Months", breaks = seq(0, 12, 2)) +
@@ -167,7 +167,7 @@ ggplot(d1, aes(x = factor(mnth), y = rate, group = yr, colour = factor(yr)))+
 
 First differences.
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 ggplot(d1 %>% 
          dplyr::group_by(agegrp) %>%
          dplyr::filter(row_number() != 1) %>%

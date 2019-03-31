@@ -1,5 +1,5 @@
 ---
-title: "GLM - remove first year"
+title: "GLM - remove 2007 year from modelling"
 author: "Mark Jones"
 date: "`r Sys.time()`"
 output:
@@ -66,7 +66,7 @@ cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55
 
 Similar to EDA. Load data, filter out last month. Compute rate (per 100k), introduce month sequence number (starts at 0) and time since introduction of RV1 (starts at zero). Aggregate across all age-groups.
 
-The `mnth_since_vac` variable is updated so that we take 07-2008 as the start of vax (i.e. drop the first year). The `incl` flags the observations we should include the models.
+The `mnth_since_vac` variable is updated so that we take 07-2008 as the start of vax (i.e. drop the first year). The `incl` variable flags the observations we should include the models.
 
 ```{r, echo = T, eval = T}
 d <- readxl::read_xls("dat_orig\\Times series set up.xls")
@@ -139,7 +139,9 @@ Model results. Interpretation is described previously.
 
 ```{r}
 get_dat <- function(x){
-  return(list(desc = x[[1]], model_res = broom::tidy(x[[2]])))
+  return(list(desc = x[[1]], 
+              model_res = broom::tidy(x[[2]]),
+              aic = AIC(x[[2]])))
 }
 l_res <-lapply(fits, get_dat)
 l_res
@@ -149,7 +151,7 @@ l_res
 
 This time there is a gap for the Jul 2007 to Jun 2008 dates as the model fit excluded the observations between these dates. The second segments are shown only for observations from Jul 2008, i.e. the data used in the models.
 
-```{r, echo = F, fig.width=10, fig.height=9}
+```{r, echo = F, fig.width=9, fig.height=12}
 get_dat <- function(x){
   return(x[[3]])
 }

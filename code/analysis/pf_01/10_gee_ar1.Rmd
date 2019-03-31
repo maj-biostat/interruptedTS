@@ -1,5 +1,5 @@
 ---
-title: "GLM - with autoregressive component"
+title: "GEE - with autoregressive component"
 author: "Mark Jones"
 date: "`r Sys.time()`"
 output:

@@ -141,7 +141,7 @@ l_res
 
 Again, we have a gap for the Jul 2007 to Jun 2008 period. The seasonal effects are shown. Winter and Spring appear to consistently be the seasons in which most cases occur. It looks like the pre-vax Winter and Spring peaks have been damped down in the post vax period. This is most apparent in the lower ages.
 
-```{r, echo = F, fig.width=10, fig.height=12, eval = T}
+```{r, echo = F, fig.width=9, fig.height=12, eval = T}
 get_dat <- function(x){
   return(x[[4]])
 }
@@ -180,5 +180,10 @@ for(i in 1:length(fits)){
 # Summary
 
 Revised version of the GLARMA models this time using Neg Bin distributional assumptions. The models seem to fit a bit better than those estimated under poisson assumptions.
+
+What next?
+
+There are a number of other approaches. The `spaMM` package (https://kimura.univ-montp2.fr/~rousset/spaMM/spaMMintro.pdf) looks worthwhile as does
+`lme4ord` (https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html). Also see https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html for overview of MM approaches.
 
 
