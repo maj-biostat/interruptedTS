@@ -1,0 +1,184 @@
+---
+title: "GLARMA - negative binomial"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(glarma))
+suppressPackageStartupMessages(library(MASS))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+Last time we fit GLARMA models using poisson distributional assumptions. The PITs looked bad so here we use negative binomial.
+
+```{r, echo = T, eval = T}
+d1 <- readRDS("dat_clean//d_seas2.RDS")
+d1$rate_lag1 <- d1$rate_lag1  / 1000
+```
+
+# GLARMA
+
+As per previous commentary except that we have to use `MASS::glm.nb` to get the initial model estimates and we need to provide `theta` for the GLARMA model.
+
+```{r}
+fit1 <- function(x){
+  dfit <- d1 %>%
+    dplyr::filter(agegrp == x & incl == 1)
+
+  lm1 <- glm.nb(count ~ mnth_seq + i_vac + mnth_since_vac + 
+               winter + spring + summer +  
+               offset(log(denom)), 
+             data = dfit)
+  
+  mX <- model.matrix(lm1)
+  y <- dfit$count
+  mOffset <- log(dfit$denom)
+  
+  lm2 <- glarma(y, mX, offset = mOffset,
+              phiLags = c(1),
+              #thetaLags = 3, #thetaInit = c(0.01),
+              type = "NegBin",
+              alpha = lm1$theta, alphaInit = lm1$theta,
+              beta = coef(lm1),
+              method = "FS",
+              residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+  s <- summary(lm2, tests = F)
+  
+  # fitted
+  dpred <- d1 %>%
+    dplyr::filter(agegrp == x)  %>%
+    dplyr::mutate(denom = 1)
+  
+  d <- d1 %>%
+    dplyr::filter(agegrp == x)
+  
+  d$pred1 <- predict(lm1, type = "response", newdata = dpred) * 100000
+  d$pred1 <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred1)
+  
+  pred2 <- 100000 * glarma::fitted.glarma(lm2)/dfit$denom
+  
+  d$pred2 <- NA
+  d$pred2[1:36] <- pred2[1:36]
+  d$pred2[49:nrow(d)] <- pred2[37:length(pred2)]
+  
+  list(desc = paste0(x), lm1, lm2, d)
+}
+fits <- lapply(unique(d1$agegrp), fit1)
+
+```
+
+Model results. Interpretation is described previously.
+
+The AIC values are consistently better (lower) than the previous models that just use the indicator variables.
+
+```{r, eval = T}
+get_dat <- function(x){
+  return(list(desc = x[[1]], 
+              glm_res = summary(x[[2]]),
+              glarma_res = summary(x[[3]], tests = F)))
+}
+l_res <-lapply(fits, get_dat)
+l_res
+```
+
+## Plot predictions.
+
+Again, we have a gap for the Jul 2007 to Jun 2008 period. The seasonal effects are shown. Winter and Spring appear to consistently be the seasons in which most cases occur. It looks like the pre-vax Winter and Spring peaks have been damped down in the post vax period. This is most apparent in the lower ages.
+
+```{r, echo = F, fig.width=10, fig.height=12, eval = T}
+get_dat <- function(x){
+  return(x[[4]])
+}
+d_res <- dplyr::bind_rows(lapply(fits, get_dat))
+
+
+ggplot(d_res, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred1, colour = cbp[2]), size = 0.8) + 
+  geom_line(aes(x = mnth_seq, y = pred2, colour = cbp[6]), size = 0.8) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+ # theme(legend.position = "none") +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free", ncol = 2)
+```
+
+## Diagnostics
+
+Some of these look a bit better than the results generated under poisson assumptions.
+
+```{r, eval = T}
+
+for(i in 1:length(fits)){
+  l1 <- fits[[i]][[3]]
+  par(mfrow = c(2,2))
+  plot(l1, which = c(2,3,5),
+       titles = list(NULL, 
+                     NULL, 
+                     "PIT for GLARMA (Neg. Binomial)"))
+}
+
+```
+
+
+# Summary
+
+Revised version of the GLARMA models this time using Neg Bin distributional assumptions. The models seem to fit a bit better than those estimated under poisson assumptions.
+
+

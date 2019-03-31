@@ -88,10 +88,12 @@ d1 <- d %>%
                 mnth_since_vac = 0:(n()-1), 
                 mnth_since_vac = mnth_since_vac -36) %>%
   dplyr::ungroup() %>%
-  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac),
-                rate_lag1 = lag(rate),
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac)) %>%
+  dplyr::group_by(agegrp) %>%
+  dplyr::mutate(rate_lag1 = lag(rate),
                 rate_d1 = rate - lag(rate),
-                rate_d1_lag1 = lag(rate_d1)) 
+                rate_d1_lag1 = lag(rate_d1)) %>%
+  dplyr::ungroup()
 
 # aggregated across all agegrp
 d2 <- d1 %>% 
@@ -103,10 +105,11 @@ d2 <- d1 %>%
   dplyr::mutate(rate = 100000 * count / denom,
                 mnth_seq = 0:(n()-1),
                 mnth_since_vac = 0:(n()-1)) %>%
-  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac),
-                rate_lag1 = lag(rate),
-                rate_d1 = rate - lag(rate),
-                rate_d1_lag1 = lag(rate_d1)) 
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac)) %>%
+  dplyr::group_by(mnth_seq,
+                  rate_lag1 = lag(rate),
+                  rate_d1 = rate - lag(rate),
+                  rate_d1_lag1 = lag(rate_d1)) 
 
 saveRDS(d1, "dat_clean\\d_by_age.RDS")
 saveRDS(d2, "dat_clean\\d_all_age.RDS")
@@ -125,10 +128,12 @@ ggplot(d1, aes(x = mnth_seq, y = rate))+
   geom_vline(xintercept = 37, colour = cbp[2]) +
   scale_x_continuous("Months from Jul'04") +
   scale_y_continuous("Rate per 100k")+
-  facet_wrap(~agegrp)
+  facet_wrap(~agegrp, ncol = 3)
 ```
 
 Allow different y-axis for each age group. What is the peak attributable to that is around month 75 in the 3 year, 4 year and 5-9 year age group? 
+
+Outbreak - include indicator.
 
 ```{r, echo = F, fig.width=10, fig.height=9}
 ggplot(d1, aes(x = mnth_seq, y = rate))+
@@ -136,7 +141,7 @@ ggplot(d1, aes(x = mnth_seq, y = rate))+
   geom_vline(xintercept = 37, colour = cbp[2]) +
   scale_x_continuous("Months from Jul'04") +
   scale_y_continuous("Rate per 100k")+
-  facet_wrap(~agegrp, scales = "free")
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
 ```
 
 All-age gastro presentations.
@@ -157,7 +162,7 @@ ggplot(d1, aes(x = factor(mnth), y = rate, group = yr, colour = factor(yr)))+
   scale_x_discrete("Months", breaks = seq(0, 12, 2)) +
   scale_y_continuous("Rate per 100k")+
   scale_color_discrete("Year")+
-  facet_wrap(~agegrp, scales = "free")
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
 ```
 
 First differences.
@@ -172,7 +177,7 @@ ggplot(d1 %>%
   geom_vline(xintercept = 37, colour = cbp[2]) +
   scale_x_continuous("Months from Aug'04") +
   scale_y_continuous("Rate per 100k")+
-  facet_wrap(~agegrp, scales = "free")
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
 ```
 
 ACFs.

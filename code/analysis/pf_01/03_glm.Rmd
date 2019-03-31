@@ -1,0 +1,171 @@
+---
+title: "GLM - remove first year"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(readxl))
+
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+Similar to EDA. Load data, filter out last month. Compute rate (per 100k), introduce month sequence number (starts at 0) and time since introduction of RV1 (starts at zero). Aggregate across all age-groups.
+
+The `mnth_since_vac` variable is updated so that we take 07-2008 as the start of vax (i.e. drop the first year). The `incl` flags the observations we should include the models.
+
+```{r, echo = T, eval = T}
+d <- readxl::read_xls("dat_orig\\Times series set up.xls")
+# by agegrp
+d1 <- d %>% 
+  dplyr::filter(!(year_adm == 2012 & month_adm == 12)) %>%
+  dplyr::rename(i_vac = vaccineyear,
+                count = counts,
+                mnth = month_adm,
+                yr = year_adm) %>%
+  dplyr::mutate(agegrp = factor(agegpfull, 
+                                labels = unique(d$agegpfull),
+                                levels = unique(d$agegpfull))) %>%
+  dplyr::select(-agegpfull, 
+                -denom_nonindig,
+                -denom_indig,
+                -counts_nonindig,
+                -counts_indig,
+                -monthcount) %>%
+  dplyr::arrange(agegrp, yr, mnth) %>%
+  dplyr::mutate(rate = 100000 * count / denom) %>%
+  dplyr::group_by(agegrp) %>%
+  dplyr::mutate(mnth_seq = 0:(n()-1),
+                mnth_since_vac = 0:(n()-1), 
+                mnth_since_vac = mnth_since_vac - 48) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac),
+                mnth_since_vac = ifelse(mnth_since_vac < 0, 0, mnth_since_vac),
+                rate_lag1 = lag(rate),
+                rate_d1 = rate - lag(rate),
+                rate_d1_lag1 = lag(rate_d1),
+                incl = ifelse(mnth_seq %in% 36:47, 0, 1)) 
+
+saveRDS(d1, "dat_clean\\d_rm_vax_1.RDS")
+```
+
+
+
+
+# GLM
+
+Independent poisson models fitted for each age group. This time we exclude the first year of vax from the model.
+
+```{r}
+fit1 <- function(x){
+  dfit <- d1 %>%
+    dplyr::filter(agegrp == x & incl == 1)
+  lm1 <- glm(count ~ mnth_seq + factor(i_vac) + mnth_since_vac + offset(log(denom)), 
+             data = dfit, family = "poisson")
+  
+  # in order to get the rate (number of cases of one unit of population)
+  # you need to do this hack
+  dpred <- d1 %>%
+    dplyr::filter(agegrp == x)  %>%
+    dplyr::mutate(denom = 1)
+  
+  d <- d1 %>%
+    dplyr::filter(agegrp == x)
+  
+  d$pred <- predict(lm1, type = "response", newdata = dpred) * 100000
+  d$pred <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred)
+  
+  list(desc = paste0(x), lm1, d)
+}
+fits <- lapply(unique(d1$agegrp), fit1)
+
+```
+
+Model results. Interpretation is described previously.
+
+```{r}
+get_dat <- function(x){
+  return(list(desc = x[[1]], model_res = broom::tidy(x[[2]])))
+}
+l_res <-lapply(fits, get_dat)
+l_res
+```
+
+## Plot predictions.
+
+This time there is a gap for the Jul 2007 to Jun 2008 dates as the model fit excluded the observations between these dates. The second segments are shown only for observations from Jul 2008, i.e. the data used in the models.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+get_dat <- function(x){
+  return(x[[3]])
+}
+d_res <- dplyr::bind_rows(lapply(fits, get_dat))
+ggplot(d_res, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred, colour = cbp[2]), size = 1) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  theme(legend.position = "none") +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
+```
+
+# Summary
+
+We used the same process that was used previously but now excluded observations from Jul 2007 to Jun 2008 in the modelling process. Results plotted for the segments used in the models.
+
+

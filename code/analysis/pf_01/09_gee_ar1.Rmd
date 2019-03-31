@@ -1,0 +1,153 @@
+---
+title: "GLM - with autoregressive component"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(geepack))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+Rather than cludge a AR1 component into a GLM, we could use a generalised estimating equation (GEE) with an AR1 correlation structure.
+
+A GEE is a bit like a mixed model but rather than modelling the conditional means you estimate a marginal mean and the error is modelled explicitly as some pre-specified correlation structure. That's more complicated than it needs to be, the point is that a GEE is like a GLM but lets you adjust the model for structure in the data such as clustering or repeat measures or serial correlation (as in a timeseries).
+
+These are a pretty good intro if you want more insight:
+
+https://rlbarter.github.io/Practical-Statistics/2017/05/10/generalized-estimating-equations-gee/
+
+https://stats.stackexchange.com/questions/17331/what-is-the-difference-between-generalized-estimating-equations-and-glmm/
+
+```{r, echo = T, eval = T}
+d1 <- readRDS("dat_clean//d_seas2.RDS")
+d1$rate_lag1 <- d1$rate_lag1  / 1000
+```
+
+# GEE
+
+Independent poisson models fitted for each age group. Exclude the first year of vax from the model and include seasonal indicator covariates.
+
+```{r}
+fit1 <- function(x){
+  dfit <- d1 %>%
+    dplyr::filter(agegrp == x & incl == 1)
+  lm1 <- geeglm(count ~ mnth_seq + factor(i_vac) + mnth_since_vac + 
+               winter + spring + summer + 
+               offset(log(denom)), 
+               id = mnth_seq,  
+             data = dfit, family = "poisson", 
+             corstr = "ar1")
+  
+  # in order to get the rate (number of cases of one unit of population)
+  # you need to do this hack
+  dpred <- d1 %>%
+    dplyr::filter(agegrp == x)  %>%
+    dplyr::mutate(denom = 1)
+  
+  d <- d1 %>%
+    dplyr::filter(agegrp == x)
+  
+  d$pred <- predict(lm1, type = "response", newdata = dpred) * 100000
+  d$pred <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred)
+  
+  list(desc = paste0(x), lm1, d)
+}
+fits <- lapply(unique(d1$agegrp), fit1)
+
+```
+
+Model results. Interpretation is described previously.
+
+The AIC values are consistently better (lower) than the previous models that just use the indicator variables.
+
+```{r}
+get_dat <- function(x){
+  return(list(desc = x[[1]], 
+              model_res = broom::tidy(x[[2]])))
+}
+l_res <-lapply(fits, get_dat)
+l_res
+```
+
+## Plot predictions.
+
+Again, we have a gap for the Jul 2007 to Jun 2008 period. The seasonal effects are shown. Winter and Spring appear to consistently be the seasons in which most cases occur. It looks like the pre-vax Winter and Spring peaks have been damped down in the post vax period. This is most apparent in the lower ages.
+
+```{r, echo = F, fig.width=10, fig.height=9}
+get_dat <- function(x){
+  return(x[[3]])
+}
+d_res <- dplyr::bind_rows(lapply(fits, get_dat))
+
+
+ggplot(d_res, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred, colour = cbp[2]), size = 1) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+ # theme(legend.position = "none") +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
+```
+
+# Summary
+
+GEE as an alternative option.
+
+

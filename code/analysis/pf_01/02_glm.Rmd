@@ -151,7 +151,7 @@ ggplot(d_res, aes(x = mnth_seq, y = rate))+
   theme(legend.position = "none") +
   scale_x_continuous("Months from Jul'04") +
   scale_y_continuous("Rate per 100k")+
-  facet_wrap(~agegrp, scales = "free")
+  facet_wrap(~agegrp, scales = "free", ncol = 3)
 ```
 
 ## Alternative parameterisation
