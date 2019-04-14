@@ -64,10 +64,12 @@ cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55
 Load data, filter out last month, compute rate (per 100k), introduce month sequence number (starts at 0) and time since introduction of RV1 (starts at zero). Aggregate across all age-groups.
 
 ```{r, echo = T}
-d <- readxl::read_xls("dat_orig\\Times series set up.xls")
+d <- readxl::read_xls("dat_orig/Times series set up_2019-04-14.xls")
 # by agegrp
 d1 <- d %>% 
+  # the last count had incomplete data
   dplyr::filter(!(year_adm == 2012 & month_adm == 12)) %>%
+  # i_vac is an indicator of the vaccine year
   dplyr::rename(i_vac = vaccineyear,
                 count = counts,
                 mnth = month_adm,
@@ -82,19 +84,25 @@ d1 <- d %>%
                 -counts_indig,
                 -monthcount) %>%
   dplyr::arrange(agegrp, yr, mnth) %>%
+  # per 100,000
   dplyr::mutate(rate = 100000 * count / denom) %>%
   dplyr::group_by(agegrp) %>%
+  # mnth_sequence is the time point for each observation in each group
+  # mnth_since_vac is months from time vaccine introduced
   dplyr::mutate(mnth_seq = 0:(n()-1),
                 mnth_since_vac = 0:(n()-1), 
                 mnth_since_vac = mnth_since_vac -36) %>%
   dplyr::ungroup() %>%
+  # get rid of the negative values in mnth_since_vac
   dplyr::mutate(mnth_since_vac = ifelse(i_vac == 0, 0, mnth_since_vac)) %>%
   dplyr::group_by(agegrp) %>%
+  # add some additional age group level variates
   dplyr::mutate(rate_lag1 = lag(rate),
                 rate_d1 = rate - lag(rate),
                 rate_d1_lag1 = lag(rate_d1)) %>%
   dplyr::ungroup()
 
+# retained but no longer used
 # aggregated across all agegrp
 d2 <- d1 %>% 
   dplyr::group_by(yr, mnth, i_vac) %>%
