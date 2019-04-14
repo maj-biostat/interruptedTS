@@ -1,0 +1,216 @@
+---
+title: "GLARMA - negative binomial"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(readxl))
+suppressPackageStartupMessages(library(glarma))
+suppressPackageStartupMessages(library(MASS))
+suppressPackageStartupMessages(library(broom))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(knitr))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+These models include indicators for outbreaks in the c("3 years", "4 years", "5-9 years") age groups and between Jul to Oct 2010.
+
+Autocorrelation typically derives from trends and seasonality. If we account for these and there is residual autocorrelation then we need to fit models that reflect this characteristic. If there is no remaining autocorrelation then don't worry about it and just use a GLM or GAM.
+
+```{r, echo = T, eval = T}
+d1 <- readRDS("dat_clean//dat_2019-04-14.RDS")
+```
+
+# GLARMA
+
+As per previous commentary except that we have to use `MASS::glm.nb` to get the initial model estimates and we need to provide `theta` for the GLARMA model.
+
+```{r}
+fit1 <- function(x){
+  dfit <- d1 %>%
+    dplyr::filter(agegrp == x & incl == 1) %>%
+    dplyr::select(-c(11, 12, 13, 18, 19, 20, 21)  )
+  
+  if(x %in% c(c("3 years", "4 years", "5-9 years"))){
+    f <- as.formula(count ~ mnth_seq + i_vac + mnth_since_vac + 
+                      winter + spring + summer +  outbreak + 
+                      offset(log(denom)))
+  } else {
+    f <- as.formula(count ~ mnth_seq + i_vac + mnth_since_vac + 
+                      winter + spring + summer +  
+                      offset(log(denom)))
+  }
+  
+  
+  lm1 <- glm.nb(f, data = dfit)
+  
+  mX <- model.matrix(lm1)
+  y <- dfit$count
+  mOffset <- log(dfit$denom)
+  
+  lm2 <- glarma(y, mX, offset = mOffset,
+              phiLags = c(1),
+              #thetaLags = 3, #thetaInit = c(0.01),
+              type = "NegBin",
+              alpha = lm1$theta, alphaInit = lm1$theta,
+              beta = coef(lm1),
+              method = "FS",
+              residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+  s <- summary(lm2, tests = F)
+  
+  # fitted
+  dpred <- d1 %>%
+    dplyr::filter(agegrp == x)  %>%
+    dplyr::mutate(denom = 1)
+  
+  d <- d1 %>%
+    dplyr::filter(agegrp == x)
+  
+  d$pred1 <- predict(lm1, type = "response", newdata = dpred) * 100000
+  d$pred1 <- ifelse(d$mnth_seq %in% 36:47, NA, d$pred1)
+  
+  pred2 <- 100000 * glarma::fitted.glarma(lm2)/dfit$denom
+  
+  d$pred2 <- NA
+  d$pred2[1:36] <- pred2[1:36]
+  d$pred2[49:nrow(d)] <- pred2[37:length(pred2)]
+  
+  list(desc = paste0(x), lm1, lm2, d)
+}
+fits <- lapply(unique(d1$agegrp), fit1)
+
+```
+
+Model results. Interpretation is described previously.
+
+The AIC values are consistently better (lower) than the previous models that just use the indicator variables.
+
+```{r, eval = T, echo = F}
+get_dat <- function(x){
+  
+  l <- list(paste0("*******************"), paste0("AGEGROUP RESULTS"), paste0("*******************"))
+  l <- c(l, age_grop = x[[1]])
+  
+  mycol.names <- c("estimate","std.error","z", "p.value")
+  
+  l1 <- list(paste0("GLM - NEGATIVE BINOMIAL"),
+             tidy(x[[2]]) %>% kable(digits = 3),
+             glance(x[[2]])%>% kable(digits = 3))
+  
+  l2 <- list(paste0("GLARMA - NEGATIVE BINOMIAL"),
+             summary(x[[3]], tests = F)$coefficients1  %>% kable(digits = 3, col.names = mycol.names),
+             summary(x[[3]], tests = F)$coefficients2  %>% kable(digits = 3, col.names = mycol.names),
+             summary(x[[3]], tests = F)$coefficients3  %>% kable(digits = 3, col.names = mycol.names),
+             summary(x[[3]], tests = F)$aic)
+  
+  l <- c(l, l1, l2)
+  
+  return(l)
+}
+l_res <-lapply(fits, get_dat)
+print(l_res)
+```
+
+## Plot predictions/Diagnostics
+
+Again, we have a gap for the Jul 2007 to Jun 2008 period. The seasonal effects are shown. Winter and Spring appear to consistently be the seasons in which most cases occur. It looks like the pre-vax Winter and Spring peaks have been damped down in the post vax period. This is most apparent in the lower ages.
+
+```{r, echo = F, fig.width=9, fig.height=12, eval = T}
+get_dat <- function(x){
+  return(x[[4]])
+}
+d_res <- dplyr::bind_rows(lapply(fits, get_dat))
+
+
+ggplot(d_res, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred2, colour = cbp[6]), size = 0.8) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free", ncol = 2)
+```
+
+
+Some of these look a bit better than the results generated under poisson assumptions.
+
+```{r, eval = T, echo = F, fig.height=7}
+
+for(i in 1:length(fits)){
+  l1 <- fits[[i]][[3]]
+  par(mfrow = c(2,2))
+  plot(l1, which = c(5, 3, 8, 9),
+       titles = list(paste0("Resid (", fits[[i]][1], ")"),
+                     paste0("PIT (", fits[[i]][1], ")"),
+                     paste0("QQ (", fits[[i]][1], ")"),
+                     paste0("ACF (", fits[[i]][1], ")")))
+}
+
+```
+
+
+# Summary
+
+Revised version of the GLARMA models this time using Neg Bin distributional assumptions. The models seem to fit a bit better than those estimated under poisson assumptions.
+
+What next?
+
+There are a number of other approaches. The `spaMM` package (https://kimura.univ-montp2.fr/~rousset/spaMM/spaMMintro.pdf) looks worthwhile as does
+`lme4ord` (https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html). Also see https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html for overview of MM approaches.
+
+

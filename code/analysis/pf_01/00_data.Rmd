@@ -1,0 +1,142 @@
+---
+title: "Data wrangling"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(simstudy))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(mcmc))
+suppressPackageStartupMessages(library(brms))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(readxl))
+
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+# Introduction
+
+Consolidated set of data manipulations to generate the analysis dataset.
+
++ Add indicator to exclude first year of vaccine from our analysis. We look at effects from Jul 2008.
++ Seasonal indicators added (Winter, Spring, Summer, Autumn)
++ Outbreak appears to be restricted to Jul - Oct 2010 inclusive in "3 years", "4 years" and "5-9 years". Outbreak indicators applied to these months/agegrps.
+
+
+```{r, echo = T}
+d <- readxl::read_xls("dat_orig/Times series set up_2019-04-14.xls")
+# by agegrp
+d1 <- d %>% 
+  # the last count had incomplete data
+  dplyr::filter(!(year_adm == 2012 & month_adm == 12)) %>%
+  # i_vac is an indicator of the vaccine year
+  dplyr::rename(i_vac = vaccineyear,
+                count = counts,
+                mnth = month_adm,
+                yr = year_adm) %>%
+  dplyr::mutate(agegrp = factor(agegpfull, 
+                                labels = unique(d$agegpfull),
+                                levels = unique(d$agegpfull))) %>%
+  dplyr::select(-agegpfull, 
+                -denom_nonindig,
+                -denom_indig,
+                -counts_nonindig,
+                -counts_indig,
+                -monthcount) %>%
+  dplyr::arrange(agegrp, yr, mnth) %>%
+  # per 100,000
+  dplyr::mutate(rate = 100000 * count / denom) %>%
+  dplyr::group_by(agegrp) %>%
+  # mnth_sequence is the time point for each observation in each group
+  # mnth_since_vac is months from time vaccine introduced
+  dplyr::mutate(mnth_seq = 0:(n()-1),
+                mnth_since_vac = 0:(n()-1), 
+                # effects of vac considered from Jul 2008
+                mnth_since_vac = mnth_since_vac -48) %>%
+  dplyr::ungroup() %>%
+  # get rid of the negative values in mnth_since_vac
+  dplyr::mutate(mnth_since_vac = ifelse(mnth_since_vac < 0, 0, mnth_since_vac),
+                incl = ifelse(mnth_seq %in% 36:47, 0, 1)) %>%
+  dplyr::group_by(agegrp) %>%
+  # add some additional age group level variates
+  dplyr::mutate(rate_lag1 = lag(rate),
+                rate_d1 = rate - lag(rate),
+                rate_d1_lag1 = lag(rate_d1)) %>%
+  dplyr::ungroup()
+
+# add seaonal indicators
+d1 <- d1 %>%
+  dplyr::mutate(winter = ifelse(mnth %in% c(6, 7, 8), 1, 0),
+                spring = ifelse(mnth %in% c(9, 10, 11), 1, 0),
+                summer = ifelse(mnth %in% c(12, 1, 2), 1, 0)) %>%
+  dplyr::mutate(season = ifelse(winter == 1, "Win", 
+                                ifelse(spring == 1, "Spr", 
+                                       ifelse(summer == 1, "Sum", "Aut"))))
+d1$season <- factor(d1$season, levels = c("Aut", "Win", "Spr", "Sum"))
+
+# add harmonic - not used but retained anyway
+d1$cos.t1 <- cos(2*pi*d1$mnth_seq*(10/120))
+d1$sin.t1 <- sin(2*pi*d1$mnth_seq*(10/120))
+d1$cos.t2 <- cos(2*pi*d1$mnth_seq*(20/120))
+d1$sin.t2 <- sin(2*pi*d1$mnth_seq*(20/120))
+
+d1$outbreak <- 0
+
+d1$outbreak[d1$yr == 2010 & 
+              d1$agegrp %in% c("3 years", "4 years", "5-9 years")] <- 1
+
+
+saveRDS(d1, "dat_clean\\dat_2019-04-14.RDS")
+
+```
+
+
+
+
