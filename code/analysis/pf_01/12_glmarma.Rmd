@@ -211,6 +211,9 @@ Revised version of the GLARMA models this time using Neg Bin distributional assu
 What next?
 
 There are a number of other approaches. The `spaMM` package (https://kimura.univ-montp2.fr/~rousset/spaMM/spaMMintro.pdf) looks worthwhile as does
-`lme4ord` (https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html). Also see https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html for overview of MM approaches.
+`lme4ord`. Also see https://bbolker.github.io/mixedmodels-misc/notes/corr_braindump.html for overview of MM approaches.
+
+
+# FIN
 
 
