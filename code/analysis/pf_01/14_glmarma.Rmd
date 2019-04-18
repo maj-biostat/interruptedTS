@@ -1,0 +1,580 @@
+---
+title: "GLARMA - negative binomial"
+author: "Mark Jones"
+date: "`r Sys.time()`"
+output:
+  html_document:
+    classoption: landscape
+    css: style.css
+    number_sections: yes
+    self_contained: yes
+    theme: united
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+geometry: left=0.2cm,right=0.2cm,top=1cm,bottom=1cm
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+<!--    toc: yes
+    toc_float: true -->
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = 'figs/')
+# install.packages(libname, dependencies = T, repos = "http://cran.curtin.edu.au")
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggfortify))
+suppressPackageStartupMessages(library(glarma))
+suppressPackageStartupMessages(library(MASS))
+suppressPackageStartupMessages(library(broom))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(kableExtra))
+suppressPackageStartupMessages(library(sandwich))
+suppressPackageStartupMessages(library(lmtest))
+
+ggplot2::theme_set(ggplot2::theme_bw())
+ggplot2::theme_update(text = element_text(size = 10))
+ggplot2::theme_update(legend.position = "top")
+# ggplot2::theme_update(legend.title = element_blank())
+ggplot2::theme_update(axis.text.x = element_text(size = 10))
+ggplot2::theme_update(axis.text.y = element_text(size = 10))
+
+# Work|Right|Fast
+# rmarkdown::render("simulation_report.Rmd", clean=TRUE)
+cbp <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+
+# Preamble
+
+These models include indicators for outbreaks in the c("3 years", "4 years", "5-9 years") age groups and between Jul to Oct 2010.
+
+Autocorrelation typically derives from trends and seasonality. If we account for these and there is residual autocorrelation then we need to fit models that reflect this characteristic. If there is no remaining autocorrelation then don't worry about it and just use a GLM or GAM.
+
+All models adopt negative binomial distributional assumptions since poisson models were heavily overdispersed.
+
+```{r, echo = T, eval = T}
+d1 <- readRDS("dat_clean//dat_2019-04-14.RDS")
+```
+
+# Results
+
+An independent model was fitted for each age-class. Table 1 shows the parameter estimates.
+
+## Age group < 12 months
+
+For the <12 months age class the most parsimonius model included an indicator variable to model the post vaccination period and an indicator variable for peak AG season (Jul to Oct). The residual deviance was 87 on 84 degrees of freedom indicating no lack of fit as did visual inspection of residual diagnostics. While an indicator variable to model peak AG periods (Jul to Oct) did not enter the model significantly it marginally improved AIC and visual inspection of residual diagnostic. An autoregressive term (AR1) was strongly supported by the data, but neither pre nor post trends were apparent. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 2516 (349) cases per 100k population and in the post vaccination period was 1479 (118). The model estimates suggested a reduction by a multiplicative factor of (exp(-0.521) = 0.594, 95%CI 0.509 to 0.693) in the rate of AG. Finally, the point estimates for the parameters were similar to those obtained using a conventional GLM, but standard errors were larger in the GLARMA model.
+
+Aside - you can use NeweyWest sandwich estimator to adjust a GLM for autocorrelation.
+
+```{r, echo = F}
+wald <- function(mod){
+  c <- glarmaModelEstimates(mod)
+  c <- c[-nrow(c),]
+  est <- exp(c[,1])
+  lwr <- exp(c[,1]+qnorm(0.025)*c[,2])
+  upr <- exp(c[,1]+qnorm(0.975)*c[,2])
+  m <- cbind(est, lwr, upr)
+  rownames(m) <- rownames(c)
+  round(m, 3)
+}
+
+
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[1] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~  i_vac + 
+                  peak + 
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+# coeftest(lm1, vcov. = NeweyWest, lag = 1, prewhite = T)
+
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(789)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+# par(mfrow = c(1, 1))
+# plot(lm2, which = 1)
+# par(mfrow = c(2, 2))
+# plot(lm2, which = c(5, 3, 8, 9),
+#        titles = list(paste0("Resid"),
+#                      paste0("PIT"),
+#                      paste0("QQ"),
+#                      paste0("ACF")))
+
+
+figdat <- function(lm2, idx){
+  dfig <- d1 %>%
+  dplyr::filter(agegrp == a[idx]) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+  pred <- 100000 * glarma::fitted.glarma(lm2)/dfit$denom
+  dfig$pred <- NA
+  dfig$pred[1:36] <- pred[1:36]
+  dfig$pred[49:nrow(dfig)] <- pred[37:length(pred)]
+  dfig
+}
+
+dfig <- figdat(lm2, 1)
+
+# dfit %>%
+#   dplyr::group_by(i_vac) %>%
+#   dplyr::summarise(rate_mean = mean(pred),
+#                    rate_sd = sd(pred))
+
+
+
+res_table <- function(id, lm2){
+  
+  dfres <- data.frame(ageclass = id, 
+                    term = c("(Intercept)","mnth_seq", "i_vac" , "mnth_since_vac" , 
+                             "winter" , "spring" , "summer" , "peak", 
+                             "outbreak", "phi_1", "phi_2"), stringsAsFactors = F)
+  dfg <- as.data.frame(glarmaModelEstimates(lm2), stringsAsFactors = F)
+  
+  dfg <- dfg %>% 
+    dplyr::mutate(term = rownames(dfg)) 
+  
+  dfres <- dplyr::left_join(dfres, dfg, by = "term")
+  dfres
+}
+
+l <- list(res_table(a[1], lm2))
+lfig <- list(dfig)
+```
+
+## Age group 1 years
+
+For the 1 year age class the most parsimonius model included an indicator variable to model the post vaccination period and a declining trend in the post vaccination period. The residual deviance was 74 on 84 degrees of freedom indicating no lack of fit as did visual inspection of residual diagnostics. An autoregressive term (AR1) was strongly supported by the data and while a pre vaccination period trend was not apparent there was a weak decling trend evident during the post vaccination period (RR 0.99 95% CI 0.97 to 1). The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 2552 (688) cases per 100k population and in the post vaccination period was 1220 (202). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.627, 95%CI 0.387 to 1.016). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+checkdev <- function(df1){
+  c(qchisq(0.025, df = df1), qchisq(0.975, df = df1))
+}
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[2] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~ i_vac + mnth_since_vac + 
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 2)
+
+l <- c(l, list(res_table(a[2], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+## Age group 2 years
+
+
+For the 2 year age class the best model included an indicator variable to model the post vaccination period and an indicator variable for peak AG season (Jul to Oct). The residual deviance was 86 on 84 degrees of freedom indicating no lack of fit as did visual inspection of residual diagnostics. An autoregressive term (AR1) was strongly supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 1233 (359) cases per 100k population and in the post vaccination period was 665 (115). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.547, 95%CI 0.440 to 0.679). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[3] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~  i_vac + 
+                  peak +  
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 3)
+
+l <- c(l, list(res_table(a[3], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+## Age group 3 years
+
+For the 3 year age class the best model included an indicator variable to model the post vaccination period, an indicator variable for peak AG season (Jul to Oct) and an indicator variable to model the outbreak during 2010. The residual deviance was 87 on 83 degrees of freedom indicating no lack of fit as did visual inspection of residual diagnostics. An autoregressive term (AR1) was weakly supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 677 (131) cases per 100k population and in the post vaccination period was 488 (168). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.604, 95%CI 0.474 to 0.768). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[4] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~  i_vac +  
+                   peak +  outbreak +
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 4)
+
+l <- c(l, list(res_table(a[4], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+## Age group 4 years
+
+For the 4 year age class the best model included an indicator variable to model the post vaccination period, an indicator variable for peak AG season (Jul to Oct) and an indicator variable to model the outbreak during 2010. The residual deviance was 81 on 83 degrees of freedom indicating no lack of fit. Visual inspection of the residual diagnostics highlighted a potentially influential point in Nov 2004. However, replacing this point with the pre vaccination median rate did not appreciably change the conclusions and so we retained the original point. An autoregressive term (AR1) was supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 476 (94) cases per 100k population and in the post vaccination period was 395 (156). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.665, 95%CI 0.486 to 0.872). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[5] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+# dfit$count[5] <- median(dfit$count[dfit$i_vac == 0])
+
+f <- as.formula(count ~  i_vac + 
+                   peak +  outbreak + 
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 5)
+
+l <- c(l, list(res_table(a[5], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+
+## Age group 5-9 years
+
+For the 5-9 year age class the best model included an indicator variable to model the post vaccination period, a weak increasing trend in the post vaccination period, an indicator variable for peak AG season (Jul to Oct) and an indicator variable to model the outbreak during 2010. The residual deviance was 89 on 82 degrees of freedom indicating no lack of fit as did visual inspection of the residual diagnostics. An autoregressive term (AR1) was supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 257 (31) cases per 100k population and in the post vaccination period was 204 (47). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.574, 95%CI 0.443 to 0.743). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[6] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~  i_vac + mnth_since_vac + 
+                   peak + outbreak +
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 6)
+
+l <- c(l, list(res_table(a[6], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+## Age group 10-19 years
+
+For the 10-19 year age class the best model included an indicator variable to model the post vaccination period, a weak increasing trend in the post vaccination period and an indicator variable for summer season. The residual deviance was 97 on 82 degrees of freedom indicating no lack of fit. However, visual inspection of the residual diagnostics suggested some deviation from normality. An autoregressive term (AR2) was supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 175 (10) cases per 100k population and in the post vaccination period was 179 (19). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.857, 95%CI 0.758 to 0.970). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[7] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~ i_vac + mnth_since_vac + 
+                   summer +  
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+#summary(lm1)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(2),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 7)
+
+l <- c(l, list(res_table(a[7], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+
+## Age group 20-44 years
+
+For the 20-44 year age class the best model included linear trend, an indicator variable to model the post vaccination period and an indicator variable for peak season. The residual deviance was 92 on 82 degrees of freedom indicating no lack of fit as did visual inspection of the residual diagnostics. Autoregressive terms were unnecessary. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 390 (24) cases per 100k population and in the post vaccination period was 412 (35). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.862, 95%CI 0.752 to 0.990). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[8] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~ mnth_seq + i_vac +
+                   peak +  
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+#summary(lm1)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          #phiLags = c(1),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+
+dfig <- figdat(lm2, 8)
+
+l <- c(l, list(res_table(a[8], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+
+
+## Age group 45-64 years
+
+For the 45-64 year age class the best model included linear trend, an indicator variable to model the post vaccination period and a small change in the linear trend in the post vaccination period. The residual deviance was 103 on 82 degrees of freedom indicating no lack of fit although visual inspection of the residual diagnostics did suggest small amounts of residual autocorrelation. An autoregressive (AR2) term was supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 514 (37) cases per 100k population and in the post vaccination period was 613 (23). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.902, 95%CI 0.841 to 0.967). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[9] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~ mnth_seq + i_vac + mnth_since_vac + 
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+#summary(lm1)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(2),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 9)
+
+l <- c(l, list(res_table(a[9], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+## Age group >= 65 years
+
+For the >= 65 year age class the best model included linear trend and an indicator variable to model the post vaccination period. The residual deviance was 103 on 82 degrees of freedom indicating no lack of fit although visual inspection of the residual diagnostics did suggest small amounts of residual autocorrelation. Autoregressive (AR1 and AR2) were supported by the data. The modelled mean (sd) pre RV vaccination rate of AG in the off-peak season was approximately 1671 (103) cases per 100k population and in the post vaccination period was 1892 (154). The model estimate for the post vaccination indicator variable showed some evidence for a (multiplicative) reduction in the rate of AG (0.843, 95%CI 0.730 to 0.973). Again, the point estimates for the parameters were similar to those obtained using a conventional GLM.
+
+```{r, echo = F}
+a <- unique(d1$agegrp)
+
+dfit <- d1 %>%
+  dplyr::filter(agegrp == a[10] & incl == 1) %>%
+  dplyr::mutate(peak = as.numeric(mnth %in% 7:10)) %>%
+  dplyr::select((-11):(-13))
+
+f <- as.formula(count ~ mnth_seq + i_vac +  
+                  offset(log(denom)))
+
+lm1 <- glm.nb(f, data = dfit)
+mX <- model.matrix(lm1)
+y <- dfit$count
+mOffset <- log(dfit$denom)
+set.seed(34)
+lm2 <- glarma(y, mX, offset = mOffset,
+          phiLags = c(1, 2),
+          type = "NegBin",
+          alpha = lm1$theta, alphaInit = lm1$theta,
+          beta = coef(lm1),
+          method = "FS",
+          residuals = "Pearson", maxit = 1000, grad = 2.22e-16)
+s <- summary(lm2, tests = F)
+# s
+
+
+dfig <- figdat(lm2, 10)
+
+l <- c(l, list(res_table(a[10], lm2)))
+lfig <- c(lfig, list(dfig))
+```
+
+
+```{r, echo = F}
+dtab <- do.call(rbind, l)
+dtab$RiskRatio <- exp(dtab$Estimate)
+dtab <- dtab %>%
+  dplyr::select(ageclass, term, Estimate, RiskRatio, everything())
+
+options(knitr.kable.NA = '-')
+kable(dtab,
+      caption = "Table 1. Model results by age class",
+      col.names = c("Age Class", "Term", "Est.", "RR", "SE", "z", "Pr(>|z|)"),
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = F, position = "left",
+                font_size = 12,
+                latex_options = "hold_position")
+```
+
+
+```{r, echo = F, fig.width=9, fig.height=12, eval = T, fig.cap="Observed (black) and fitted values from respective models"}
+dfig <- do.call(rbind, lfig)
+ggplot(dfig, aes(x = mnth_seq, y = rate))+
+  geom_line()+
+  geom_line(aes(x = mnth_seq, y = pred, colour = cbp[6]), size = 0.8) + 
+  geom_vline(xintercept = 37, colour = cbp[2]) +
+  scale_color_discrete("Fitted", labels = "")+
+  scale_x_continuous("Months from Jul'04") +
+  scale_y_continuous("Rate per 100k")+
+  facet_wrap(~agegrp, scales = "free", ncol = 2)
+```
+
+
+# Summary
+
+Provided parmonious glarma models with parameter estimates and visualisation.
+
+
+# FIN
+
+
