@@ -559,7 +559,8 @@ kable(dtab,
 
 # Visualisation of Observed and fitted values
 
-Figure 1 shows the observed and fitted values for each age class. The gap in the fitted values represents the data in the first year of vaccination that was excluded from the models.
+Figure 1 shows the observed and fitted values for each age class. The gap in the fitted values represents the data in the first year of vaccination that was excluded from the models (from Jul 2007 to Jun 2008 inclusive).
+
 
 ```{r, echo = F, fig.width=9, fig.height=12, eval = T, fig.cap="Figure 1. Observed (black) and fitted values from respective models"}
 dfig <- do.call(rbind, lfig)
